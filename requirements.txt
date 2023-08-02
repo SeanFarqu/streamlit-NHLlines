@@ -1,0 +1,15 @@
+streamlit==1.25.0\
+streamlit-authenticator==0.1.5
+pandas==2.0.3
+pathlib @ file:///Users/ktietz/demo/mc3/conda-bld/pathlib_1629713961906/work
+pickleshare @ file:///tmp/build/80754af9/pickleshare_1606932040724/work
+PILasOPENCV==2.7
+numpy==1.24.2
+Jinja2==3.1.2
+requests==2.28.2
+fuzzywuzzy==0.18.0
+urllib3==1.26.15
+lxml @ file:///private/var/folders/nz/j6p8yfhx1mv_0grj5xl4650h0000gp/T/abs_71bcfe2b-fe7b-414a-9d7e-4f32bdd95f6d2vxca0jd/croots/recipe/lxml_1657545136492/work
+beautifulsoup4 @ file:///private/var/folders/nz/j6p8yfhx1mv_0grj5xl4650h0000gp/T/abs_croot-15cbtalq/beautifulsoup4_1650462161715/work
+json5 @ file:///tmp/build/80754af9/json5_1624432770122/work
+matplotlib @ file:///private/var/folders/nz/j6p8yfhx1mv_0grj5xl4650h0000gp/T/abs_5fi9l6u9e6/croots/recipe/matplotlib-suite_1660167931049/work
