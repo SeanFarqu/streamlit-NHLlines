@@ -84,8 +84,8 @@ player_info_df.rename(columns={"Expected Goals For WOI": "xGF WOI", "Expected Go
 names = ["Sean Farquharson", "Michael Perelman"]
 usernames = ["sfarg", "mperelman"]
 
-file_path = Path("/Users/SFarquharson/Documents/Blues_project") / "hashed_pw.pkl"
-with file_path.open("rb") as file:
+# file_path = Path("/Users/SFarquharson/Documents/Blues_project") / "hashed_pw.pkl"
+with open("hashed_pw.pkl","rb") as file:
     hashed_passwords = pickle.load(file)
     
 authenticator = stauth.Authenticate(names, usernames, hashed_passwords,
