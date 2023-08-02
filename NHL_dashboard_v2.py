@@ -14,7 +14,7 @@ from pathlib import Path
 import requests
 from lxml import etree
 from lxml import html
-from bs4 import BeautifulSoup
+
 import json
 import os
 import shutil
