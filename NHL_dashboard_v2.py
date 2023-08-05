@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[172]:
+# In[14]:
 
 
 import pandas as pd
@@ -23,15 +23,15 @@ from fuzzywuzzy import fuzz
 from collections import defaultdict
 from urllib.parse import unquote
 from urllib.parse import quote
-from PIL import Image
 
+from PIL import Image
 import matplotlib.pyplot as plt
 from PIL import ImageSequence
 from PIL import ImageOps
 import io
 
 
-# In[173]:
+# In[15]:
 
 
 # Load player information
@@ -41,6 +41,9 @@ player_info_df = player_info_df.round(2)
 # Load player stats
 player_stats_df = pd.read_csv("Total_Points.csv")
 
+# Player Salary info
+player_data_df = pd.read_csv('player_salaries.csv')
+
 # Team logos
 def load_logo_csv():
     return pd.read_csv('nhl_team_logos.csv')
@@ -48,7 +51,7 @@ def load_logo_csv():
 logo_df = load_logo_csv()
 
 
-# In[174]:
+# In[16]:
 
 
 # Function to convert time strings to decimal minutes
@@ -70,20 +73,20 @@ player_info_df["TOI (min)"] = player_info_df["TOI (min)"].apply(time_to_decimal_
 player_stats_df["Total TOI(min)"] = player_stats_df["Total TOI(min)"].apply(time_to_decimal_minutes)
 
 
-# In[175]:
+# In[17]:
 
 
 player_stats_df.rename(columns={"TOI/GP(min)": "TOI/GP"}, inplace=True)
 player_info_df.rename(columns={"Expected Goals For WOI": "xGF WOI", "Expected Goals Against WOI": "xGA WOI"}, inplace=True)
 
 
-# In[176]:
+# In[20]:
 
 
 # User Auth
 names = ["Sean Farquharson", "Michael Perelman"]
 usernames = ["sfarg", "mperelman"]
-
+    
 # file_path = Path("/Users/SFarquharson/Documents/Blues_project") / "hashed_pw.pkl"
 with open("hashed_pw.pkl","rb") as file:
     hashed_passwords = pickle.load(file)
@@ -91,12 +94,21 @@ with open("hashed_pw.pkl","rb") as file:
 authenticator = stauth.Authenticate(names, usernames, hashed_passwords,
                                    "nhllines_dashboard","abcdef", cookie_expiry_days=30)
 
+def initialize_status():
+    if 'authentication_status' not in st.session_state:
+        st.session_state['authentication_status'] = False
+
+initialize_status()  # Initialize 'authentication_status'
+
+# if "authentication_status" not in st.session_state:
+#     st.session_state['authentication_status'] = False
+
 name, authentication_status, username = authenticator.login("Login", "main")
 
-if authentication_status == False:
+if not authentication_status:
     st.error("Username/password is incorrect")
     
-if authentication_status == None:
+if authentication_status is None:
     st.warning("Please enter your username and password")
     
 if authentication_status:
@@ -176,10 +188,96 @@ if authentication_status:
                 matched_players['defense'].append(match + ' ❌')
                 player_image_urls['defense'].append(image_url)
 
+        return matched_players, player_image_urls
+    
+    # For matchup page
+    
+    def fetch_matchup(team, all_players, player_info_df):
+        url = f"https://www.dailyfaceoff.com/teams/{team.lower().replace(' ', '-')}/line-combinations/"
+        base_url = "https://www.dailyfaceoff.com"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
+        }
+        try:
+            response = requests.get(url, headers=headers)
+            response.raise_for_status()  # Raise an exception for 4xx and 5xx errors
+        except requests.exceptions.RequestException as e:
+            st.error(f"Error fetching data: {e}")
+            return []
+
+        tree = etree.HTML(response.text)
+        forwards, forward_image_urls, defense, defense_image_urls = parsePlayerTable(tree)
+
+        # prepend base_url to each image url
+        forward_image_urls = [base_url + url for url in forward_image_urls]
+        defense_image_urls = [base_url + url for url in defense_image_urls]
+
+        matched_players = defaultdict(list)
+        player_image_urls = defaultdict(list)
+
+        # combine forwards and defense into one list
+        all_players_list = forwards + defense
+        all_image_urls = forward_image_urls + defense_image_urls
+
+        # match players
+        for player_name, image_url in zip(all_players_list, all_image_urls):
+            match, score = fuzzy_match(player_name, all_players, min_score=70)
+            if match and player_info_df[player_info_df['Player'] == match]['TOI (min)'].iloc[0] >= 300:
+                matched_players['players'].append(match)
+                player_image_urls['players'].append(image_url)
+            elif match:
+                matched_players['players'].append(match + ' ❌')
+                player_image_urls['players'].append(image_url)
 
         return matched_players, player_image_urls
 
+    def generate_team_lines(team, all_players, player_info_df):
+        matched_players, _ = fetch_matchup(team, all_players, player_info_df)
+
+        line_choices = {}
+        for i in range(1, 6):  # create 5 selections for any players
+            selected_player = st.selectbox(f'Select player {i} for {team}', options=matched_players['players'])
+            line_choices[f"player_{i}"] = selected_player
+
+        return line_choices
+
+
+    def display_line_matchup(team1, line_choices_team1, team2, line_choices_team2, player_info_df):
+        for i in range(1, 6):  # Iterate 5 times for 5 players
+            player1_key = f"player_{i}"
+            player2_key = f"player_{i}"
+
+            player1 = line_choices_team1.get(player1_key)
+            player2 = line_choices_team2.get(player2_key)
+
+            if player1 and player2:  # Make sure players exist
+                player1_info = player_info_df[player_info_df['Player'] == player1.replace(' ❌', '')]
+                player2_info = player_info_df[player_info_df['Player'] == player2.replace(' ❌', '')]
+
+                if '❌' not in player1 and '❌' not in player2:  # Exclude the players with less than 300 minutes playtime
+                    if not player1_info.empty and not player2_info.empty:
+                        xGF_WOI_diff = player1_info['xGF WOI'].values[0] - player2_info['xGF WOI'].values[0]
+                        xGA_WOI_diff = player1_info['xGA WOI'].values[0] - player2_info['xGA WOI'].values[0]
+
+                        cols = st.columns(3)
+
+                        with cols[0]:
+                            st.markdown(f"**{player1}**")  # Make name bold
+                            st.write(f'xGF WOI: {player1_info["xGF WOI"].values[0]:.2f}' + (' ✅' if xGF_WOI_diff > 0 else ''))
+                            st.write(f'xGA WOI: {player1_info["xGA WOI"].values[0]:.2f}' + (' 🛡️' if xGA_WOI_diff < 0 else ''))
+                        with cols[1]:
+                            st.write("vs")
+                            st.write(f'xGF WOI difference: {xGF_WOI_diff:.2f}')
+                            st.write(f'xGA WOI difference: {xGA_WOI_diff:.2f}')
+                        with cols[2]:
+                            st.markdown(f"**{player2}**")  # Make name bold
+                            st.write(f'xGF WOI: {player2_info["xGF WOI"].values[0]:.2f}' + (' ✅' if xGF_WOI_diff < 0 else ''))
+                            st.write(f'xGA WOI: {player2_info["xGA WOI"].values[0]:.2f}' + (' 🛡️' if xGA_WOI_diff > 0 else ''))
+
+
+                            
     def main():
+        
         st.markdown("<h1 style='text-align: center; color: black;'><i><b>NHL LINES ADVANCED</b></i></h1>", unsafe_allow_html=True)
 
         st.markdown("<h6 style='text-align: center; color: black;'>By Sean Farquharson</h6>", unsafe_allow_html=True)
@@ -198,222 +296,277 @@ if authentication_status:
         
         authenticator.logout("Logout", "sidebar")
         st.sidebar.title(f"Welcome {name}")
-        st.sidebar.header('Analyze Team')
-
-        # Sidebar for team selection
-        selected_team = st.sidebar.selectbox("Select NHL Team", player_info_df["Team"].unique(), index=player_info_df["Team"].unique().tolist().index("St Louis Blues"))
-
-        # Sidebar - Navigation
-        st.sidebar.header('Navigation')
-        page = st.sidebar.selectbox('Select Page', ['Player Profile', 'League Leaderboard'])
-
-        # Load logo for the selected team
-        logo_url = logo_df[logo_df['Team'] == selected_team]['Logo'].values[0]
-
-        # Display the team's logo below the title, centered
-        st.markdown(f"<center><img src='{logo_url}'></center><br>", unsafe_allow_html=True)
-
-        # Convert selected_team to the correct format (lowercase with hyphens)
-        formatted_team = selected_team.lower().replace(' ', '-')
-
+        
+        # Get a list of all team names
+        teams_list = player_info_df["Team"].unique().tolist()
+        
         # Extract all player names
         all_players = player_info_df['Player'].unique().tolist()
+        
+        # Add new sidebar section for page selection
+        st.sidebar.header('Page Selection')
+        page_selection = st.sidebar.radio('Select Page', ['Matchup Analysis', 'Individual Team Lines'])
 
-        # Fetch team lines and player image urls from dailyfaceoff.com
-        team_lines, player_image_urls = fetch_team_lines(formatted_team, all_players, player_info_df)
+        if page_selection == 'Matchup Analysis':
+            st.header("Select Teams")
+            team1 = st.selectbox('Choose first team', options=teams_list, key='team1_select')
+            teams_list_2 = teams_list.copy()
+            teams_list_2.remove(team1)  # remove first selected team from the second list
+            team2 = st.selectbox('Choose second team', options=teams_list_2, key='team2_select')
 
-        st.markdown("<div style='background-color: #F0F0F0; padding: 10px; border: 1px solid black; border-radius: 5px;'><b><span style='color: red;'>❌</span> Player has less than 300 minutes played</b><br><b><span style='color: blue;'>🛡️</span> Player has more than 16 successful defensive touches (5v5 per 60mins)</b><br><b><span style='color: green;'>🟢</span> Player's xGF WOI is greater than xGA WOI (5v5 per 60mins)</b><br><b><span style='color: red;'>🔴</span> Player's xGF WOI is less than xGA WOI (5v5 per 60mins)</b><br><b><span style='color: brown;'>🏒</span> Player has greater than or equal to 43 Possession Driving Plays (5v5 per 60mins)</b><br><b><span style='color: yellow;'>⚠️</span> Player has more than 4.04 Total Shot From Slot Attempts (5v5 per 60mins)</b></div>", unsafe_allow_html=True)
+            st.title(f"Matchup Analysis: {team1} vs {team2}")
 
-        # Display team lines
-        team_players = []
-        for position_group, players in team_lines.items():
-            st.markdown(f"<h2 style='text-align: center; color: black;'><b>{position_group.upper()}</b></h2>", unsafe_allow_html=True)
-            if position_group == 'forwards':
-                grouping = 3
-            else:
-                grouping = 2
-            grouped_players = [players[n:n+grouping] for n in range(0, len(players), grouping)]
-            image_urls_grouped = [player_image_urls[position_group][n:n+grouping] for n in range(0, len(players), grouping)]
+            # Generate lines
+            line_choices_team1 = generate_team_lines(team1, all_players, player_info_df)
+            line_choices_team2 = generate_team_lines(team2, all_players, player_info_df)
 
-            for group, image_urls in zip(grouped_players, image_urls_grouped):
-                cols = st.columns([1]*(grouping - len(group)) + [2]*len(group) + [1]*(grouping - len(group)))
+            # Display selected lines
+            display_line_matchup(team1, line_choices_team1, team2, line_choices_team2, player_info_df)
+            
+        elif page_selection == 'Individual Team Lines':
 
-                # Initialize the differential counter for this line
-                line_differential = 0
+            st.sidebar.header('Analyze Team')
 
-                for i, (player_name, image_url) in enumerate(zip(group, image_urls)):
-                    player_info = player_info_df[player_info_df['Player'] == player_name]
-                    if not player_info.empty:
-                        defensive_touches = player_info['Successful Defensive Touches'].values[0]
-                        xGF_WOI = player_info['xGF WOI'].values[0]
-                        xGA_WOI = player_info['xGA WOI'].values[0]
-                        possession_driving_plays = player_info['Possession Driving Plays'].values[0]
-                        total_shot_from_slot_attempts = player_info['Total Shot From Slot Attempts'].values[0]
+            # Sidebar for team selection
+            selected_team = st.sidebar.selectbox("Select NHL Team", player_info_df["Team"].unique(), index=player_info_df["Team"].unique().tolist().index("St Louis Blues"))
 
-                        # Update the line differential
-                        line_differential += (xGF_WOI - xGA_WOI)
+            # Sidebar - Navigation
+            st.sidebar.header('Navigation')
+            page = st.sidebar.selectbox('Select Page', ['Player Profile', 'League Leaderboard'])
 
-                        player_name_display = player_name
-                        if defensive_touches > 16:
-                            player_name_display += ' 🛡️'
-                        if xGF_WOI > xGA_WOI:
-                            player_name_display += ' 🟢'
-                        elif xGF_WOI < xGA_WOI:
-                            player_name_display += ' 🔴'
-                        if possession_driving_plays >= 43:
-                            player_name_display += ' 🏒'
-                        if total_shot_from_slot_attempts > 4.04:
-                            player_name_display += ' ⚠️'
-                    else:
-                        player_name_display = player_name
-                    cols[i+(grouping - len(group))].markdown(f"<center><img src='{image_url}' width='90'></center>", unsafe_allow_html=True)
-                    cols[i+(grouping - len(group))].markdown(f"<center>{player_name_display}</center>", unsafe_allow_html=True)
-                    team_players.append(player_name)
+            # Load logo for the selected team
+            logo_url = logo_df[logo_df['Team'] == selected_team]['Logo'].values[0]
 
-                # Display the line differential after each line
-                st.markdown(f"<h6 style='text-align: center; color: black;'><b>xG Differential: {round(line_differential, 2)}</b></h6>", unsafe_allow_html=True)
+            # Display the team's logo below the title, centered
+            st.markdown(f"<center><img src='{logo_url}'></center><br>", unsafe_allow_html=True)
 
-        if page == 'Player Profile':
+            # Convert selected_team to the correct format (lowercase with hyphens)
+            formatted_team = selected_team.lower().replace(' ', '-')
 
-            # Player profile section
-            st.sidebar.markdown("<h2 style='text-align: center; color: black;'><i><b>PLAYER PROFILE</b></i></h2>", unsafe_allow_html=True)
+            # Extract all player names
+            all_players = player_info_df['Player'].unique().tolist()
 
-            # Dropdown to select player for player profile
-            selected_player = st.sidebar.selectbox("Select Player", team_players)
+            # Fetch team lines and player image urls from dailyfaceoff.com
+            team_lines, player_image_urls = fetch_team_lines(formatted_team, all_players, player_info_df)
 
-            # Filter player stats based on selected player
-            player_profile_stats = player_stats_df[player_stats_df['Player'] == selected_player][['Position', 'GP', 'TOI/GP', 'G', 'A', 'PTS', '+/-', 'S']]
-            player_info = player_info_df[player_info_df['Player'] == selected_player][['xGF WOI', 'xGA WOI', 'Total Shot From Slot Attempts', 'Possession Driving Plays', 'Successful Defensive Touches']]
+            st.markdown("<div style='background-color: #F0F0F0; padding: 10px; border: 1px solid black; border-radius: 5px;'><b><span style='color: red;'>❌</span> Player has less than 300 minutes played</b><br><b><span style='color: blue;'>🛡️</span> Player has more than 16 successful defensive touches (5v5 per 60mins)</b><br><b><span style='color: green;'>🟢</span> Player's xGF WOI is greater than xGA WOI (5v5 per 60mins)</b><br><b><span style='color: red;'>🔴</span> Player's xGF WOI is less than xGA WOI (5v5 per 60mins)</b><br><b><span style='color: brown;'>🏒</span> Player has greater than or equal to 43 Possession Driving Plays (5v5 per 60mins)</b><br><b><span style='color: yellow;'>⚠️</span> Player has more than 4.04 Total Shot From Slot Attempts (5v5 per 60mins)</b></div>", unsafe_allow_html=True)
 
-            # Display player profile stats
-            st.sidebar.markdown("<h3 style='text-align: center; color: black;'><i><b>PLAYER STATS</b></i></h3>", unsafe_allow_html=True)
-            for i in range(0, len(player_profile_stats.columns), 2):
-                cols = st.sidebar.columns(2)
-                for j in range(2):
-                    if i + j < len(player_profile_stats.columns):
-                        column = player_profile_stats.columns[i + j]
-                        value = player_profile_stats[column].values[0]
-                        cols[j].markdown(f"<b>{column}</b> {value}", unsafe_allow_html=True)
+            # Display team lines
+            team_players = []
+            player_info_visible = st.checkbox('Display player info')  # Checkbox to toggle player info visibility
 
-             # Displaying title for advanced stats
-            st.sidebar.markdown("<h3 style='text-align: center; color: black;'><i><b>ADVANCED STATS</b></i><br><i style='font-size: 15px;'>(5v5 per 60mins)</i></h3>", unsafe_allow_html=True)
+            for position_group, players in team_lines.items():
+                st.markdown(f"<h2 style='text-align: center; color: black;'><b>{position_group.upper()}</b></h2>", unsafe_allow_html=True)
+                if position_group == 'forwards':
+                    grouping = 3
+                else:
+                    grouping = 2
+                grouped_players = [players[n:n+grouping] for n in range(0, len(players), grouping)]
+                image_urls_grouped = [player_image_urls[position_group][n:n+grouping] for n in range(0, len(players), grouping)]
 
-            # Display player info
-            for i in range(0, len(player_info.columns), 2):
-                cols = st.sidebar.columns(2)
-                for j in range(2):
-                    if i + j < len(player_info.columns):
-                        column = player_info.columns[i + j]
-                        value = player_info[column].values[0]
-                        cols[j].markdown(f"<b>{column}</b> {value}", unsafe_allow_html=True)
+                for group, image_urls in zip(grouped_players, image_urls_grouped):
+                    cols = st.columns([1]*(grouping - len(group)) + [2]*len(group) + [1]*(grouping - len(group)))
 
-            # Add Histograms for selected stats here
-            st.sidebar.markdown("<h3 style='text-align: center; color: black;'><i><b>HISTOGRAMS</b></i></h3>", unsafe_allow_html=True)
+                    # Initialize the differential counter for this line
+                    line_differential = 0
 
-            plt.style.use('ggplot')  # Apply a style
+                    for i, (player_name, image_url) in enumerate(zip(group, image_urls)):
+                        player_info = player_info_df[player_info_df['Player'] == player_name]
+                        if not player_info.empty:
+                            defensive_touches = player_info['Successful Defensive Touches'].values[0]
+                            xGF_WOI = player_info['xGF WOI'].values[0]
+                            xGA_WOI = player_info['xGA WOI'].values[0]
+                            possession_driving_plays = player_info['Possession Driving Plays'].values[0]
+                            total_shot_from_slot_attempts = player_info['Total Shot From Slot Attempts'].values[0]
 
-            # Override grid settings
-            plt.rc('axes', grid=False)
-            plt.rc('axes', facecolor='white')
+                            # Update the line differential
+                            line_differential += (xGF_WOI - xGA_WOI)
 
-            for stat in ['xGF WOI', 'xGA WOI', 'Total Shot From Slot Attempts', 'Possession Driving Plays', 'Successful Defensive Touches']:
-                selected_player_stat = player_info_df[player_info_df['Player'] == selected_player][stat].values[0]
-                average_stat = player_info_df[player_info_df['TOI (min)'] > 300][stat].mean()
+                            player_name_display = player_name
+                            if defensive_touches > 16:
+                                player_name_display += ' 🛡️'
+                            if xGF_WOI > xGA_WOI:
+                                player_name_display += ' 🟢'
+                            elif xGF_WOI < xGA_WOI:
+                                player_name_display += ' 🔴'
+                            if possession_driving_plays >= 43:
+                                player_name_display += ' 🏒'
+                            if total_shot_from_slot_attempts > 4.04:
+                                player_name_display += ' ⚠️'
+                        else:
+                            player_name_display = player_name
 
-                all_players_stat = player_info_df[player_info_df['TOI (min)'] > 300][stat]
+                        # Get player salary data
+                        player_salary_data = player_data_df[player_data_df['Player'] == player_name]
+                        if player_salary_data.empty:  # If exact match not found, use fuzzy match
+                            fuzzy_match = process.extractOne(player_name, player_data_df['Player'])
+                            if fuzzy_match[1] > 80:  # If similarity is greater than 80%
+                                player_salary_data = player_data_df[player_data_df['Player'] == fuzzy_match[0]]
 
-                # Create the bins
-                bins = np.linspace(all_players_stat.min(), all_players_stat.max(), 30)
+                        if not player_salary_data.empty and player_info_visible:  # If data is available and checkbox is ticked
+                            age = f"{player_salary_data['Age'].values[0]}yo" if not pd.isna(player_salary_data['Age'].values[0]) else ""
+                            handed = f"{player_salary_data['Handed'].values[0]}-Handed" if not pd.isna(player_salary_data['Handed'].values[0]) else ""
 
-                # Create a figure and axis object
-                fig, ax = plt.subplots()
+                            # Remove '$' and ',' from 'Cap Hit', then convert it to float and format
+                            cap_hit = player_salary_data['Cap Hit'].values[0].replace('$', '').replace(',', '')
+                            cap_hit = f"${float(cap_hit):,.0f}" if cap_hit else ""
 
-                # Load the gif from the URL
-                response = requests.get(logo_url)
-                gif = Image.open(io.BytesIO(response.content))
+                            clause = player_salary_data['Clause'].values[0] if not pd.isna(player_salary_data['Clause'].values[0]) else ""
 
-                # Convert gif to png
-                pngs = []
-                for frame in ImageSequence.Iterator(gif):
-                    png = frame.convert('RGBA')
-                    pngs.append(png)
-                img = pngs[0]  # Use only first frame of gif
+                            # Add the salary data to the player name display
+                            player_info_string = f"{age}\n{handed}\n{cap_hit}\n{clause}"
+                            player_info_string = "\n".join(filter(bool, player_info_string.split("\n")))  # Removes empty lines
 
-                # Add a white border around the image to effectively "shrink" its size within the plot
-                border_size = int(max(img.size) * 99 / 100)  
-                img_with_border = ImageOps.expand(img, border=border_size, fill='white')
+                            player_name_display += f'\n{player_info_string}'
 
-                # Convert PIL Image to numpy array
-                img = np.asarray(img_with_border).copy()  # Make a copy of the array
+                        cols[i+(grouping - len(group))].markdown(f"<center><img src='{image_url}' width='90'></center>", unsafe_allow_html=True)
+                        cols[i+(grouping - len(group))].markdown(f"<center>{player_name_display}</center>", unsafe_allow_html=True)
+                        team_players.append(player_name)
 
-                # Fade out the image by adjusting the alpha channel
-                img[..., -1] = img[..., -1] * 0.1
+                    # Display the line differential after each line
+                    st.markdown(f"<h6 style='text-align: center; color: black;'><b>Line xG Differential: {round(line_differential, 2)}</b></h6>", unsafe_allow_html=True)
 
-                # Plot the image in the background, set zorder to -1 so it's behind other plot elements
-                ax.imshow(img, extent=[all_players_stat.min(), all_players_stat.max(), 0, 120], zorder=-1, aspect='auto')
+            if page == 'Player Profile':
 
-                # Create histogram for each bar
-                for b in bins[:-1]:
-                    # Select data for this bar
-                    bar_data = all_players_stat[(all_players_stat >= b) & (all_players_stat < b + bins[1] - bins[0])]
-                    color = 'skyblue' if (bar_data.mean() < selected_player_stat) else 'lightgrey'
-                    ax.hist(bar_data, bins=[b, b + bins[1] - bins[0]], color=color, edgecolor='black', alpha=0.5)
+                # Player profile section
+                st.sidebar.markdown("<h2 style='text-align: center; color: black;'><i><b>PLAYER PROFILE</b></i></h2>", unsafe_allow_html=True)
 
-                # Add vertical line for the selected player's stat
-                ax.axvline(selected_player_stat, color='r', linestyle='dashed', linewidth=2, label=selected_player)
+                # Dropdown to select player for player profile
+                selected_player = st.sidebar.selectbox("Select Player", team_players)
 
-                # Add a title and labels
-                ax.set_title(f'{stat} Distribution', fontsize=14)
-                ax.set_xlabel(stat, fontsize=12)
-                ax.set_ylabel('Frequency', fontsize=12)
+                # Filter player stats based on selected player
+                player_profile_stats = player_stats_df[player_stats_df['Player'] == selected_player][['Position', 'GP', 'TOI/GP', 'G', 'A', 'PTS', '+/-', 'S']]
+                player_info = player_info_df[player_info_df['Player'] == selected_player][['xGF WOI', 'xGA WOI', 'Total Shot From Slot Attempts', 'Possession Driving Plays', 'Successful Defensive Touches']]
 
-                # Enable grid
-                ax.grid(True)
+                # Display player profile stats
+                st.sidebar.markdown("<h3 style='text-align: center; color: black;'><i><b>PLAYER STATS</b></i></h3>", unsafe_allow_html=True)
+                for i in range(0, len(player_profile_stats.columns), 2):
+                    cols = st.sidebar.columns(2)
+                    for j in range(2):
+                        if i + j < len(player_profile_stats.columns):
+                            column = player_profile_stats.columns[i + j]
+                            value = player_profile_stats[column].values[0]
+                            cols[j].markdown(f"<b>{column}</b> {value}", unsafe_allow_html=True)
 
-                # Set y limit to fix the scaling issue
-                ax.set_ylim([0, 80])  # Set the maximum limit to 100
+                 # Displaying title for advanced stats
+                st.sidebar.markdown("<h3 style='text-align: center; color: black;'><i><b>ADVANCED STATS</b></i><br><i style='font-size: 15px;'>(5v5 per 60mins)</i></h3>", unsafe_allow_html=True)
 
-                # Adjust the layout
-                fig.tight_layout()
+                # Display player info
+                for i in range(0, len(player_info.columns), 2):
+                    cols = st.sidebar.columns(2)
+                    for j in range(2):
+                        if i + j < len(player_info.columns):
+                            column = player_info.columns[i + j]
+                            value = player_info[column].values[0]
+                            cols[j].markdown(f"<b>{column}</b> {value}", unsafe_allow_html=True)
 
-                # Add legend
-                ax.legend()
+                # Add Histograms for selected stats here
+                st.sidebar.markdown("<h3 style='text-align: center; color: black;'><i><b>HISTOGRAMS</b></i></h3>", unsafe_allow_html=True)
 
-                st.sidebar.pyplot(fig)  # Pass figure to st.pyplot()
-                plt.clf()  # Clear the current figure after plotting
+                plt.style.use('ggplot')  # Apply a style
 
-            # Show message if no stats available
-            if player_profile_stats.empty and player_info.empty:
-                st.sidebar.write(f"No stats available for {selected_player}")
+                # Override grid settings
+                plt.rc('axes', grid=False)
+                plt.rc('axes', facecolor='white')
 
-        elif page == 'League Leaderboard':
-            st.sidebar.header("League Leaderboard")
+                for stat in ['xGF WOI', 'xGA WOI', 'Total Shot From Slot Attempts', 'Possession Driving Plays', 'Successful Defensive Touches']:
+                    selected_player_stat = player_info_df[player_info_df['Player'] == selected_player][stat].values[0]
+                    average_stat = player_info_df[player_info_df['TOI (min)'] > 300][stat].mean()
 
-            # Filter player_stats_df for players with more than 300 minutes played
-            filtered_player_stats_df = player_stats_df[player_stats_df['Total TOI(min)'] > 300]
+                    all_players_stat = player_info_df[player_info_df['TOI (min)'] > 300][stat]
 
-            # Filter player_info_df for players with more than 300 minutes played
-            filtered_player_info_df = player_info_df[player_info_df['TOI (min)'] > 300]
+                    # Create the bins
+                    bins = np.linspace(all_players_stat.min(), all_players_stat.max(), 30)
 
-            # List of stats to display
-            stats_to_display = ['G', 'A', 'PTS', '+/-', 'S', 'xGF WOI', 'xGA WOI', 'Total Shot From Slot Attempts', 'Possession Driving Plays', 'Successful Defensive Touches']
+                    # Create a figure and axis object
+                    fig, ax = plt.subplots()
 
-            # Allow user to select stat
-            selected_stat = st.sidebar.selectbox('Select Stat', stats_to_display)
+                    # Load the gif from the URL
+                    response = requests.get(logo_url)
+                    gif = Image.open(io.BytesIO(response.content))
 
-            if selected_stat in ['G', 'A', 'PTS', '+/-', 'S']:
-                # Display top 10 players for selected stat from player_stats_df
-                top_players = filtered_player_stats_df.nlargest(10, selected_stat)[['Player', selected_stat]]
-                st.sidebar.markdown(f"#### Top 10 Players for {selected_stat}")
-                for i, row in top_players.iterrows():
-                    st.sidebar.markdown(f"{row['Player']}: {row[selected_stat]}")
+                    # Convert gif to png
+                    pngs = []
+                    for frame in ImageSequence.Iterator(gif):
+                        png = frame.convert('RGBA')
+                        pngs.append(png)
+                    img = pngs[0]  # Use only first frame of gif
 
-            else:
-                # Display top 10 players for selected stat from player_info_df
-                top_players_info = filtered_player_info_df.nlargest(10, selected_stat)[['Player', 'Team', selected_stat]]
-                st.sidebar.markdown(f"#### Top 10 Players for {selected_stat}")
-                for i, row in top_players_info.iterrows():
-                    st.sidebar.markdown(f"{row['Player']} ({row['Team']}): {row[selected_stat]}")
+                    # Add a white border around the image to effectively "shrink" its size within the plot
+                    border_size = int(max(img.size) * 99 / 100)  
+                    img_with_border = ImageOps.expand(img, border=border_size, fill='white')
+
+                    # Convert PIL Image to numpy array
+                    img = np.asarray(img_with_border).copy()  # Make a copy of the array
+
+                    # Fade out the image by adjusting the alpha channel
+                    img[..., -1] = img[..., -1] * 0.1
+
+                    # Plot the image in the background, set zorder to -1 so it's behind other plot elements
+                    ax.imshow(img, extent=[all_players_stat.min(), all_players_stat.max(), 0, 120], zorder=-1, aspect='auto')
+
+                    # Create histogram for each bar
+                    for b in bins[:-1]:
+                        # Select data for this bar
+                        bar_data = all_players_stat[(all_players_stat >= b) & (all_players_stat < b + bins[1] - bins[0])]
+                        color = 'skyblue' if (bar_data.mean() < selected_player_stat) else 'lightgrey'
+                        ax.hist(bar_data, bins=[b, b + bins[1] - bins[0]], color=color, edgecolor='black', alpha=0.5)
+
+                    # Add vertical line for the selected player's stat
+                    ax.axvline(selected_player_stat, color='r', linestyle='dashed', linewidth=2, label=selected_player)
+
+                    # Add a title and labels
+                    ax.set_title(f'{stat} Distribution', fontsize=14)
+                    ax.set_xlabel(stat, fontsize=12)
+                    ax.set_ylabel('Frequency', fontsize=12)
+
+                    # Enable grid
+                    ax.grid(True)
+
+                    # Set y limit to fix the scaling issue
+                    ax.set_ylim([0, 80])  # Set the maximum limit to 100
+
+                    # Adjust the layout
+                    fig.tight_layout()
+
+                    # Add legend
+                    ax.legend()
+
+                    st.sidebar.pyplot(fig)  # Pass figure to st.pyplot()
+                    plt.clf()  # Clear the current figure after plotting
+
+                # Show message if no stats available
+                if player_profile_stats.empty and player_info.empty:
+                    st.sidebar.write(f"No stats available for {selected_player}")
+
+            elif page == 'League Leaderboard':
+                st.sidebar.header("League Leaderboard")
+
+                # Filter player_stats_df for players with more than 300 minutes played
+                filtered_player_stats_df = player_stats_df[player_stats_df['Total TOI(min)'] > 300]
+
+                # Filter player_info_df for players with more than 300 minutes played
+                filtered_player_info_df = player_info_df[player_info_df['TOI (min)'] > 300]
+
+                # List of stats to display
+                stats_to_display = ['G', 'A', 'PTS', '+/-', 'S', 'xGF WOI', 'xGA WOI', 'Total Shot From Slot Attempts', 'Possession Driving Plays', 'Successful Defensive Touches']
+
+                # Allow user to select stat
+                selected_stat = st.sidebar.selectbox('Select Stat', stats_to_display)
+
+                if selected_stat in ['G', 'A', 'PTS', '+/-', 'S']:
+                    # Display top 10 players for selected stat from player_stats_df
+                    top_players = filtered_player_stats_df.nlargest(10, selected_stat)[['Player', selected_stat]]
+                    st.sidebar.markdown(f"#### Top 10 Players for {selected_stat}")
+                    for i, row in top_players.iterrows():
+                        st.sidebar.markdown(f"{row['Player']}: {row[selected_stat]}")
+
+                else:
+                    # Display top 10 players for selected stat from player_info_df
+                    top_players_info = filtered_player_info_df.nlargest(10, selected_stat)[['Player', 'Team', selected_stat]]
+                    st.sidebar.markdown(f"#### Top 10 Players for {selected_stat}")
+                    for i, row in top_players_info.iterrows():
+                        st.sidebar.markdown(f"{row['Player']} ({row['Team']}): {row[selected_stat]}")   
 
     if __name__ == "__main__":
         main()
